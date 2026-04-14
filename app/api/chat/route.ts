@@ -29,43 +29,57 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Mensagem inválida ou vazia.' }, { status: 400 });
     }
 
-    // 3. Inicialização dos Clientes (Lógica de Varredura Universal)
-    let validApiKey = '';
-    for (const [key, value] of Object.entries(process.env)) {
-      if (typeof value === 'string' && value.trim().startsWith('AIza')) {
-        validApiKey = value.trim();
-        break;
-      }
-    }
+    // 3. Inicialização dos Clientes com a variável de ambiente correta
+    const apiKey = process.env.GEMINI_API_KEY;
 
-    if (!validApiKey) {
-      throw new Error(`Nenhuma chave válida do Gemini encontrada. Certifique-se de colar uma chave que comece com "AIza" no painel de Secrets.`);
+    if (!apiKey) {
+      throw new Error('A chave da API do Google Gemini (GEMINI_API_KEY) não está configurada.');
     }
     
-    const ai = new GoogleGenAI({ apiKey: validApiKey });
-    const supabase = getSupabase();
+    const ai = new GoogleGenAI({ apiKey: apiKey });
+
+    // Tratamos a inicialização do supabase para lidar com o erro de configuração e avisar o usuário
+    let supabase;
+    try {
+      supabase = getSupabase();
+    } catch (e: any) {
+      throw new Error('Serviço de RAG indisponível temporariamente: Erro de configuração no banco de dados. Por favor, tente novamente mais tarde.');
+    }
 
     // 4. Geração do Embedding da Pergunta
-    const embeddingResponse = await ai.models.embedContent({
-      model: 'models/embedding-001',
-      contents: message,
-    });
-    
-    const queryEmbedding = embeddingResponse.embeddings?.[0]?.values;
-    if (!queryEmbedding) {
-      throw new Error('Falha ao gerar o vetor (embedding) da pergunta.');
+    let queryEmbedding;
+    try {
+      const embeddingResponse = await ai.models.embedContent({
+        model: 'models/embedding-001',
+        contents: message,
+      });
+
+      queryEmbedding = embeddingResponse.embeddings?.[0]?.values;
+      if (!queryEmbedding) {
+        throw new Error('Falha ao gerar o vetor (embedding) da pergunta.');
+      }
+    } catch (e: any) {
+       console.error('Erro no Gemini (Embedding):', e);
+       throw new Error('Falha na comunicação com o serviço de Inteligência Artificial para interpretar sua pergunta. Por favor, tente novamente.');
     }
 
     // 5. Busca Vetorial no Supabase (RPC)
-    const { data: documents, error: dbError } = await supabase.rpc('buscar_artigos_reforma', {
-      query_embedding: queryEmbedding,
-      match_threshold: 0.6, // Nota de corte (ajuste se necessário)
-      match_count: 5        // Traz os 5 artigos mais relevantes
-    });
+    let documents;
+    try {
+      const { data, error: dbError } = await supabase.rpc('buscar_artigos_reforma', {
+        query_embedding: queryEmbedding,
+        match_threshold: 0.6, // Nota de corte (ajuste se necessário)
+        match_count: 5        // Traz os 5 artigos mais relevantes
+      });
 
-    if (dbError) {
-      console.error('Erro no Supabase:', dbError);
-      throw new Error('Erro ao buscar o contexto jurídico no banco de dados. Verifique se a função RPC foi criada corretamente.');
+      if (dbError) {
+        console.error('Erro no Supabase:', dbError);
+        throw new Error('Erro ao acessar o banco de dados de legislação.');
+      }
+      documents = data;
+    } catch (e: any) {
+      console.error('Erro ao comunicar com o banco de dados:', e);
+      throw new Error('Banco de dados de legislação (RAG) temporariamente indisponível. Para garantir a qualidade jurídica e evitar informações imprecisas, por favor, tente novamente mais tarde.');
     }
 
     // 6. Montagem do Contexto (RAG)
@@ -92,12 +106,16 @@ CONTEXTO LEGAL RECUPERADO DO BANCO DE DADOS:
 ${contextText}`;
 
     // 8. Chamada ao LLM (Gemini 2.5 Flash) com Streaming
+    // Definimos maxOutputTokens para ajudar a proteger os limites do Rate Limit
     const responseStream = await ai.models.generateContentStream({
       model: 'gemini-2.5-flash',
       contents: [
         { role: 'user', parts: [{ text: systemPrompt }] },
         { role: 'user', parts: [{ text: message }] }
       ],
+      config: {
+        maxOutputTokens: 1024,
+      }
     });
 
     // 9. Retorno em Streaming para o Front-end

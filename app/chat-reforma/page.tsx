@@ -149,7 +149,7 @@ export default function ChatReformaPage() {
             <div className="text-sm">
               <p className="font-bold mb-1">Atenção: Sistema Indisponível</p>
               <p>{statusMessage}</p>
-              <p className="mt-2 text-xs opacity-80">Verifique se as variáveis SUPABASE_URL e SUPABASE_ANON_KEY foram configuradas corretamente no painel de Secrets.</p>
+              <p className="mt-2 text-xs opacity-80">Verifique se as variáveis de ambiente (GEMINI_API_KEY, SUPABASE_URL e SUPABASE_ANON_KEY) foram configuradas corretamente.</p>
             </div>
           </div>
         )}
