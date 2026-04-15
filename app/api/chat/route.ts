@@ -60,7 +60,7 @@ export async function POST(req: Request) {
       }
     } catch (e: any) {
        console.error('Erro no Gemini (Embedding):', e);
-       throw new Error('Falha na comunicação com o serviço de Inteligência Artificial para interpretar sua pergunta. Por favor, verifique se a sua API Key do Google está correta e tente novamente.');
+       throw new Error(`Falha na comunicação com o Gemini (Embedding): ${e.message || 'Erro desconhecido'}. Verifique sua API Key.`);
     }
 
     // 5. Busca Vetorial no Supabase (RPC)
