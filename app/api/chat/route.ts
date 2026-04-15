@@ -50,7 +50,7 @@ export async function POST(req: Request) {
     let queryEmbedding;
     try {
       const embeddingResponse = await ai.models.embedContent({
-        model: 'models/embedding-001',
+        model: 'text-embedding-004',
         contents: message,
       });
 
@@ -60,7 +60,7 @@ export async function POST(req: Request) {
       }
     } catch (e: any) {
        console.error('Erro no Gemini (Embedding):', e);
-       throw new Error('Falha na comunicação com o serviço de Inteligência Artificial para interpretar sua pergunta. Por favor, tente novamente.');
+       throw new Error('Falha na comunicação com o serviço de Inteligência Artificial para interpretar sua pergunta. Por favor, verifique se a sua API Key do Google está correta e tente novamente.');
     }
 
     // 5. Busca Vetorial no Supabase (RPC)
