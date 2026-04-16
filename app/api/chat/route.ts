@@ -47,34 +47,34 @@ export async function POST(req: Request) {
     }
 
     // 4. Geração do Embedding da Pergunta
-    // Fazemos um fallback de versão: tentamos a v004 (SDK moderno) e se o projeto na GCP rejeitar, caímos para a v001.
-    // **Modo de Diagnóstico:** Se ambos falharem, em vez de travar o chat, vamos logar e responder com contexto vazio.
+    // Reescrito para ser ESPELHO EXATO da Ingestão no Python.
+    // Ingestão usou: model_id="gemini-embedding-001" e task_type="RETRIEVAL_DOCUMENT"
+    // Busca DEVE usar: model="text-embedding-004" (no novo Node SDK, 'gemini-embedding-001' é o nome legado, text-embedding-004 é a constante atual equivalente para essa família na v1)
+    // E DEVE usar taskType="RETRIEVAL_QUERY"
     let queryEmbedding;
     let contextText = 'Nenhum artigo relevante encontrado na base de dados para esta pergunta.';
 
     try {
-      try {
-        const embeddingResponse = await ai.models.embedContent({
-          model: 'text-embedding-004',
-          contents: message,
-        });
-        queryEmbedding = embeddingResponse.embeddings?.[0]?.values;
-      } catch (e4: any) {
-         console.warn('text-embedding-004 não disponível para esta chave. Tentando embedding-001...');
-         const fallbackResponse = await ai.models.embedContent({
-           model: 'models/embedding-001',
-           contents: message,
-         });
-         queryEmbedding = fallbackResponse.embeddings?.[0]?.values;
-      }
+      const embeddingResponse = await ai.models.embedContent({
+        model: 'text-embedding-004',
+        contents: message,
+        config: {
+          taskType: 'RETRIEVAL_QUERY', // Este parâmetro é OBRIGATÓRIO para bater com a ingestão "RETRIEVAL_DOCUMENT"
+        }
+      });
+      queryEmbedding = embeddingResponse.embeddings?.[0]?.values;
 
       if (!queryEmbedding) {
         throw new Error('Retorno do vetor veio vazio do Google.');
       }
 
-      // 5. Busca Vetorial no Supabase (RPC) - Só acontece se teve embedding
+      // Truncamento 768 para PGVector: A ingestão no Python usou `vector = res.embeddings[0].values[:768]`
+      // Precisamos fazer o mesmo aqui na query para garantir que o tamanho bata perfeitamente!
+      const queryVectorTruncado = queryEmbedding.slice(0, 768);
+
+      // 5. Busca Vetorial no Supabase (RPC)
       const { data, error: dbError } = await supabase.rpc('buscar_artigos_reforma', {
-        query_embedding: queryEmbedding,
+        query_embedding: queryVectorTruncado, // Passa o array de 768 posições!
         match_threshold: 0.6, // Nota de corte (ajuste se necessário)
         match_count: 5        // Traz os 5 artigos mais relevantes
       });
@@ -89,13 +89,16 @@ export async function POST(req: Request) {
         contextText = data.map((doc: any) =>
           `[Dispositivo: ${doc.codigo_dispositivo} | Contexto: ${doc.contexto_hierarquico}]\n${doc.conteudo_original}`
         ).join('\n\n---\n\n');
+      } else {
+        // Se a busca voltou, mas com 0 artigos atingindo o corte
+         contextText = 'Nenhum artigo relevante encontrado na base de dados para esta pergunta com a precisão exigida.';
       }
 
     } catch (ragError: any) {
        console.error('Falha geral no bloco RAG/Embedding:', ragError);
-       // Não travamos a execução. Vamos injetar uma mensagem dizendo que o banco falhou,
-       // assim você verá a inteligência geral tentar responder.
-       contextText = `⚠️ ATENÇÃO SISTEMA: Ocorreu uma falha ao consultar o banco de dados legal (${ragError.message}). Não confie totalmente nas respostas geradas.`;
+       // Como acordado, o sistema não pode mascarar ou responder sem RAG e se passar por consultor jurídico sem a fonte!
+       // Se o RAG falhar na raiz (embedding recusado pela API, BD fora), abortamos.
+       throw new Error(`Falha crítica na Base de Conhecimento (RAG). Erro interno: ${ragError.message}. Por segurança jurídica, a resposta foi cancelada.`);
     }
 
     // 7. Engenharia de Prompt Estruturado (Guardrails)
