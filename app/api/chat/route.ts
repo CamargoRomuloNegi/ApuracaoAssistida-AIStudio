@@ -47,20 +47,30 @@ export async function POST(req: Request) {
     }
 
     // 4. Geração do Embedding da Pergunta
+    // Fazemos um fallback de versão: tentamos a v004 (SDK moderno) e se o projeto na GCP rejeitar, caímos para a v001.
     let queryEmbedding;
     try {
       const embeddingResponse = await ai.models.embedContent({
-        model: 'embedding-001',
+        model: 'text-embedding-004',
         contents: message,
       });
-
       queryEmbedding = embeddingResponse.embeddings?.[0]?.values;
-      if (!queryEmbedding) {
-        throw new Error('Falha ao gerar o vetor (embedding) da pergunta.');
-      }
-    } catch (e: any) {
-       console.error('Erro no Gemini (Embedding):', e);
-       throw new Error(`Falha na comunicação com o Gemini (Embedding): ${e.message || 'Erro desconhecido'}.`);
+    } catch (e4: any) {
+       console.warn('text-embedding-004 não disponível para esta chave. Tentando embedding-001...');
+       try {
+         const fallbackResponse = await ai.models.embedContent({
+           model: 'models/embedding-001',
+           contents: message,
+         });
+         queryEmbedding = fallbackResponse.embeddings?.[0]?.values;
+       } catch (e1: any) {
+          console.error('Erro no Gemini (Embedding Fallback):', e1);
+          throw new Error(`Sua API Key não suporta modelos de Embedding. Erro: ${e1.message || 'Desconhecido'}.`);
+       }
+    }
+
+    if (!queryEmbedding) {
+      throw new Error('Falha crítica: Não foi possível gerar o vetor (embedding) da sua pergunta.');
     }
 
     // 5. Busca Vetorial no Supabase (RPC)
