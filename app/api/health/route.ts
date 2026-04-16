@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
-import { GoogleGenAI } from '@google/genai';
 
 export async function GET() {
   const diagnosticInfo: any = {
