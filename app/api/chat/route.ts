@@ -73,9 +73,10 @@ export async function POST(req: Request) {
       const queryVectorTruncado = queryEmbedding.slice(0, 768);
 
       // 5. Busca Vetorial no Supabase (RPC)
+      // Ajuste de threshold para modelos da v4: Os tensores costumam resultar em cosine similarity mais baixas (ex: 0.3 a 0.5).
       const { data, error: dbError } = await supabase.rpc('buscar_artigos_reforma', {
         query_embedding: queryVectorTruncado, // Passa o array de 768 posições!
-        match_threshold: 0.6, // Nota de corte (ajuste se necessário)
+        match_threshold: 0.1, // Abaixado drasticamente para abrir a torneira e ver as pontuações reais.
         match_count: 5        // Traz os 5 artigos mais relevantes
       });
 
@@ -87,10 +88,14 @@ export async function POST(req: Request) {
       // 6. Montagem do Contexto (RAG)
       if (data && data.length > 0) {
         contextText = data.map((doc: any) =>
-          `[Dispositivo: ${doc.codigo_dispositivo} | Contexto: ${doc.contexto_hierarquico}]\n${doc.conteudo_original}`
+          `[Dispositivo: ${doc.codigo_dispositivo} | Similaridade RAG: ${(doc.similaridade * 100).toFixed(2)}% | Contexto: ${doc.contexto_hierarquico}]\n${doc.conteudo_original}`
         ).join('\n\n---\n\n');
+
+        // Log interno para nos ajudar a debugar se precisar olhar os logs da Vercel
+        console.log(`RAG obteve ${data.length} artigos. Top 1 Similaridade: ${data[0].similaridade}`);
       } else {
         // Se a busca voltou, mas com 0 artigos atingindo o corte
+         console.warn("RAG retornou VAZIO mesmo com threshold em 0.1");
          contextText = 'Nenhum artigo relevante encontrado na base de dados para esta pergunta com a precisão exigida.';
       }
 
