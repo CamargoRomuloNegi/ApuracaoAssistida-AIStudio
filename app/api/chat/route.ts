@@ -48,34 +48,31 @@ export async function POST(req: Request) {
 
     // 4. Geração do Embedding da Pergunta
     // Fazemos um fallback de versão: tentamos a v004 (SDK moderno) e se o projeto na GCP rejeitar, caímos para a v001.
+    // **Modo de Diagnóstico:** Se ambos falharem, em vez de travar o chat, vamos logar e responder com contexto vazio.
     let queryEmbedding;
+    let contextText = 'Nenhum artigo relevante encontrado na base de dados para esta pergunta.';
+
     try {
-      const embeddingResponse = await ai.models.embedContent({
-        model: 'text-embedding-004',
-        contents: message,
-      });
-      queryEmbedding = embeddingResponse.embeddings?.[0]?.values;
-    } catch (e4: any) {
-       console.warn('text-embedding-004 não disponível para esta chave. Tentando embedding-001...');
-       try {
+      try {
+        const embeddingResponse = await ai.models.embedContent({
+          model: 'text-embedding-004',
+          contents: message,
+        });
+        queryEmbedding = embeddingResponse.embeddings?.[0]?.values;
+      } catch (e4: any) {
+         console.warn('text-embedding-004 não disponível para esta chave. Tentando embedding-001...');
          const fallbackResponse = await ai.models.embedContent({
            model: 'models/embedding-001',
            contents: message,
          });
          queryEmbedding = fallbackResponse.embeddings?.[0]?.values;
-       } catch (e1: any) {
-          console.error('Erro no Gemini (Embedding Fallback):', e1);
-          throw new Error(`Sua API Key não suporta modelos de Embedding. Erro: ${e1.message || 'Desconhecido'}.`);
-       }
-    }
+      }
 
-    if (!queryEmbedding) {
-      throw new Error('Falha crítica: Não foi possível gerar o vetor (embedding) da sua pergunta.');
-    }
+      if (!queryEmbedding) {
+        throw new Error('Retorno do vetor veio vazio do Google.');
+      }
 
-    // 5. Busca Vetorial no Supabase (RPC)
-    let documents;
-    try {
+      // 5. Busca Vetorial no Supabase (RPC) - Só acontece se teve embedding
       const { data, error: dbError } = await supabase.rpc('buscar_artigos_reforma', {
         query_embedding: queryEmbedding,
         match_threshold: 0.6, // Nota de corte (ajuste se necessário)
@@ -86,20 +83,19 @@ export async function POST(req: Request) {
         console.error('Erro no Supabase:', dbError);
         throw new Error('Erro ao acessar o banco de dados de legislação.');
       }
-      documents = data;
-    } catch (e: any) {
-      console.error('Erro ao comunicar com o banco de dados:', e);
-      throw new Error('Banco de dados de legislação (RAG) temporariamente indisponível. Para garantir a qualidade jurídica e evitar informações imprecisas, por favor, tente novamente mais tarde.');
-    }
 
-    // 6. Montagem do Contexto (RAG)
-    let contextText = '';
-    if (documents && documents.length > 0) {
-      contextText = documents.map((doc: any) => 
-        `[Dispositivo: ${doc.codigo_dispositivo} | Contexto: ${doc.contexto_hierarquico}]\n${doc.conteudo_original}`
-      ).join('\n\n---\n\n');
-    } else {
-      contextText = 'Nenhum artigo relevante encontrado na base de dados para esta pergunta.';
+      // 6. Montagem do Contexto (RAG)
+      if (data && data.length > 0) {
+        contextText = data.map((doc: any) =>
+          `[Dispositivo: ${doc.codigo_dispositivo} | Contexto: ${doc.contexto_hierarquico}]\n${doc.conteudo_original}`
+        ).join('\n\n---\n\n');
+      }
+
+    } catch (ragError: any) {
+       console.error('Falha geral no bloco RAG/Embedding:', ragError);
+       // Não travamos a execução. Vamos injetar uma mensagem dizendo que o banco falhou,
+       // assim você verá a inteligência geral tentar responder.
+       contextText = `⚠️ ATENÇÃO SISTEMA: Ocorreu uma falha ao consultar o banco de dados legal (${ragError.message}). Não confie totalmente nas respostas geradas.`;
     }
 
     // 7. Engenharia de Prompt Estruturado (Guardrails)
